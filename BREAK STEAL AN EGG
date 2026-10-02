@@ -1,0 +1,1697 @@
+-- KenHub — Break & Steal an Egg
+-- Deobfuscated & cleaned: Gray theme, Key System, Tween auto-farm, ESP & bugs fully fixed
+
+local Players           = game:GetService("Players")
+local CoreGui           = game:GetService("CoreGui")
+local TweenService      = game:GetService("TweenService")
+local RunService        = game:GetService("RunService")
+local UserInputService  = game:GetService("UserInputService")
+local HttpService       = game:GetService("HttpService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local CollectionService = game:GetService("CollectionService")
+
+local localPlayer = Players.LocalPlayer
+local playerGui   = localPlayer:WaitForChild("PlayerGui")
+
+-- ─── Key System Verification ─────────────────────────────────────────────────
+
+local KEY_SYSTEM_PASSED = false
+local KEY_FILE_NAME     = "KenHub_KeyAuth.json"
+local CORRECT_KEY       = "KENHUBOFFICIAL"
+local KEY_DISCORD_LINK  = "https://discord.gg/tDnTUSETu"
+
+local function checkExistingKey()
+    if not isfile or not readfile or not isfile(KEY_FILE_NAME) then return false end
+    local ok, data = pcall(function() return HttpService:JSONDecode(readfile(KEY_FILE_NAME)) end)
+    if ok and data and data.Key == CORRECT_KEY and data.Timestamp then
+        -- Check if 1 hour (3600 seconds) has elapsed
+        if os.time() - data.Timestamp < 3600 then
+            return true
+        end
+    end
+    return false
+end
+
+local function saveKeySession()
+    if writefile then
+        pcall(function()
+            writefile(KEY_FILE_NAME, HttpService:JSONEncode({
+                Key = CORRECT_KEY,
+                Timestamp = os.time()
+            }))
+        end)
+    end
+end
+
+if checkExistingKey() then
+    KEY_SYSTEM_PASSED = true
+else
+    -- Load WindUI just for the Key System window popup
+    local windUISource
+    pcall(function()
+        if isfile and readfile and isfile("WindUI_Cache.lua") then
+            windUISource = readfile("WindUI_Cache.lua")
+        else
+            windUISource = game:HttpGet("https://raw.githubusercontent.com/Footagesus/WindUI/main/dist/main.lua")
+        end
+    end)
+
+    if windUISource then
+        local chunk = loadstring(windUISource)
+        if chunk then
+            local ok, wlib = pcall(chunk)
+            if ok and type(wlib) == "table" then
+                local keyWindow = wlib:CreateWindow({
+                    Title       = "KenHub - Key Authentication",
+                    Icon        = "rbxassetid://110165664140192",
+                    Size        = UDim2.fromOffset(450, 260),
+                    Transparent = true,
+                    Theme       = "Dark",
+                    Resizable   = false,
+                })
+
+                local keyTab = keyWindow:Tab({ Title = "Access Key", Icon = "key" })
+                local keySec = keyTab:Section({ Title = "Enter Key to Proceed", Opened = true })
+
+                local enteredKeyText = ""
+
+                keySec:Paragraph({ Title = "Get Key from Discord", Desc = "Join our community discord to get your authorization key:\n" .. KEY_DISCORD_LINK })
+
+                keySec:Input({
+                    Title       = "Authorization Key",
+                    Placeholder = "Enter Key Here...",
+                    Callback    = function(v) enteredKeyText = v end,
+                })
+
+                keySec:Button({
+                    Title = "Verify Key",
+                    Callback = function()
+                        if enteredKeyText == CORRECT_KEY then
+                            saveKeySession()
+                            KEY_SYSTEM_PASSED = true
+                            wlib:Notify({ Title = "Success", Content = "Key verified! Loading script...", Duration = 3, Icon = "check" })
+                            pcall(function() keyWindow:Destroy() end)
+                        else
+                            wlib:Notify({ Title = "Invalid Key", Content = "The key entered is incorrect.", Duration = 3, Icon = "x" })
+                        end
+                    end,
+                })
+
+                keySec:Button({
+                    Title = "Copy Discord Link",
+                    Callback = function()
+                        if setclipboard then pcall(function() setclipboard(KEY_DISCORD_LINK) end) end
+                        wlib:Notify({ Title = "Copied", Content = "Discord link copied to clipboard!", Duration = 2, Icon = "copy" })
+                    end,
+                })
+            end
+        end
+    end
+
+    -- Yield until user inputs the correct key
+    while not KEY_SYSTEM_PASSED do
+        task.wait(0.5)
+    end
+end
+
+-- ─── Teardown Previous Instance ──────────────────────────────────────────────
+
+if _G.KenHubInstance and typeof(_G.KenHubInstance) == "table" and _G.KenHubInstance.Destroy then
+    pcall(function() _G.KenHubInstance:Destroy() end)
+end
+
+if _G.KenHubConnections and type(_G.KenHubConnections) == "table" then
+    for _, conn in ipairs(_G.KenHubConnections) do
+        local c = conn
+        pcall(function() c:Disconnect() end)
+    end
+end
+
+_G.KenHubConnections = {}
+
+pcall(function()
+    local char = localPlayer.Character
+    if char and char:FindFirstChild("HumanoidRootPart") then
+        char.HumanoidRootPart.Anchored = false
+    end
+    local ninja  = workspace:FindFirstChild("KenHub_NinjaPlatform")
+    local global = workspace:FindFirstChild("KenHub_GlobalPlatform")
+    if ninja  then ninja:Destroy()  end
+    if global then global:Destroy() end
+end)
+
+pcall(function()
+    for _, name in ipairs({ "KenHub_MobileToggle", "KenHub_ESP" }) do
+        if gethui and gethui():FindFirstChild(name)     then gethui():FindFirstChild(name):Destroy()                   end
+        if CoreGui:FindFirstChild(name)                 then CoreGui:FindFirstChild(name):Destroy()                    end
+        if localPlayer:FindFirstChild("PlayerGui")
+           and localPlayer.PlayerGui:FindFirstChild(name) then localPlayer.PlayerGui:FindFirstChild(name):Destroy()   end
+    end
+end)
+
+local function trackConnection(conn)
+    if conn and _G.KenHubConnections then
+        table.insert(_G.KenHubConnections, conn)
+    end
+    return conn
+end
+
+-- ─── State Defaults ──────────────────────────────────────────────────────────
+
+_G.KenHubState = _G.KenHubState or {
+    NinjaSteal           = false,
+    UnderDepth           = 2.8,
+    TargetRarity         = "Any Rarity",
+    InstantReturn        = true,
+    AntiFall             = true,
+    NinjaStealthRun      = true,
+    AutoBreakUnder       = false,
+    AutoBreakAura        = false,
+    TargetEggType        = "All Eggs",
+    TargetWeight         = "Any",
+    UnderFarmDepth       = 2.8,
+    AutoEquipPickaxe     = true,
+    AutoTreadmill        = false,
+    TreadmillUnequip     = true,
+    AutoUpgradePlot      = false,
+    AutoUpgradeTreadmill = false,
+    AutoBuyPickaxe       = false,
+    AutoBankAnimals      = true,
+    AutoBatAura          = false,
+    BatRange             = 15,
+    TargetPlayers        = true,
+    TargetGuards         = true,
+    EggESP               = false,
+    PickupESP            = false,
+    PlayerESP            = false,
+    RareNotifier         = true,
+    WalkSpeed            = 16,
+    JumpPower            = 50,
+    InfiniteJump         = false,
+    Noclip               = false,
+    Fly                  = false,
+    FlySpeed             = 50,
+}
+
+local state = _G.KenHubState
+
+-- ─── WindUI Loader ───────────────────────────────────────────────────────────
+
+local windUISource
+
+if isfile and readfile and isfile("WindUI_Cache.lua") then
+    local cached = readfile("WindUI_Cache.lua")
+    if cached and #cached > 5000 then windUISource = cached end
+end
+
+if not windUISource and isfile and readfile and isfile("WindUI_Source.lua") then
+    local src = readfile("WindUI_Source.lua")
+    if src and #src > 5000 then windUISource = src end
+end
+
+if not windUISource then
+    local ok, result = pcall(function()
+        return game:HttpGet("https://raw.githubusercontent.com/Footagesus/WindUI/main/dist/main.lua")
+    end)
+    if ok and result and #result > 5000 then
+        windUISource = result
+        if writefile then
+            pcall(function() writefile("WindUI_Cache.lua", windUISource) end)
+        end
+    end
+end
+
+assert(windUISource, "[KenHub] Failed to load WindUI. Check connection or WindUI_Cache.lua.")
+
+local windUIChunk, windUIErr = loadstring(windUISource)
+assert(windUIChunk, "[KenHub] WindUI compile failed: " .. tostring(windUIErr))
+
+local windUIok, windUI = pcall(windUIChunk)
+assert(windUIok and type(windUI) == "table", "[KenHub] WindUI init failed: " .. tostring(windUI))
+
+-- ─── Mobile Toggle (Gray Theme) ──────────────────────────────────────────────
+
+local function createMobileToggle(window)
+    local guiParent
+    pcall(function()
+        guiParent = gethui and gethui() or CoreGui:FindFirstChild("RobloxGui") or CoreGui
+    end)
+    if not guiParent then guiParent = localPlayer:WaitForChild("PlayerGui") end
+
+    local mobileGui = Instance.new("ScreenGui")
+    mobileGui.Name            = "KenHub_MobileToggle"
+    mobileGui.ResetOnSpawn    = false
+    mobileGui.DisplayOrder    = 999999
+    mobileGui.IgnoreGuiInset  = true
+    mobileGui.ZIndexBehavior  = Enum.ZIndexBehavior.Sibling
+    mobileGui.Enabled         = false
+    mobileGui.Parent          = guiParent
+
+    local btn = Instance.new("ImageButton")
+    btn.Name                = "KenToggleBtn"
+    btn.Size                = UDim2.new(0, 56, 0, 56)
+    btn.Position            = UDim2.new(0.35, 0, 0.15, 0)
+    btn.BackgroundColor3    = Color3.fromHex("#1E293B")
+    btn.BackgroundTransparency = 0.2
+    btn.Image               = "rbxassetid://110165664140192"
+    btn.ScaleType           = Enum.ScaleType.Fit
+    btn.AutoButtonColor     = false
+    btn.ZIndex              = 99999
+    btn.Parent              = mobileGui
+
+    local btnCorner = Instance.new("UICorner")
+    btnCorner.CornerRadius = UDim.new(1, 0)
+    btnCorner.Parent = btn
+
+    local btnStroke = Instance.new("UIStroke")
+    btnStroke.Thickness        = 2.5
+    btnStroke.Color            = Color3.fromHex("#64748B")
+    btnStroke.ApplyStrokeMode  = Enum.ApplyStrokeMode.Border
+    btnStroke.Parent           = btn
+
+    local isDragging, hasDragged = false, false
+    local tapStartTime = 0
+    local dragStartPos, dragStartInput
+
+    local function handleDrag(input)
+        local delta    = input.Position - dragStartInput
+        local viewport = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize or Vector2.new(1920, 1080)
+        btn.Position   = UDim2.new(0,
+            math.clamp(dragStartPos.X.Offset + delta.X, 5, viewport.X - 61),
+            0,
+            math.clamp(dragStartPos.Y.Offset + delta.Y, 5, viewport.Y - 61)
+        )
+    end
+
+    btn.InputBegan:Connect(function(input)
+        if input.UserInputType ~= Enum.UserInputType.MouseButton1
+            and input.UserInputType ~= Enum.UserInputType.Touch then return end
+        isDragging     = true
+        hasDragged     = false
+        dragStartPos   = btn.Position
+        dragStartInput = input.Position
+        tapStartTime   = tick()
+        TweenService:Create(btn,       TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Size = UDim2.new(0, 50, 0, 50) }):Play()
+        TweenService:Create(btnStroke, TweenInfo.new(0.12), { Color = Color3.fromHex("#94A3B8"), Thickness = 3 }):Play()
+        input.Changed:Connect(function()
+            if input.UserInputState == Enum.UserInputState.End then isDragging = false end
+        end)
+    end)
+
+    btn.InputChanged:Connect(function(input)
+        if not isDragging then return end
+        if input.UserInputType ~= Enum.UserInputType.MouseMovement
+            and input.UserInputType ~= Enum.UserInputType.Touch then return end
+        if (input.Position - dragStartInput).Magnitude > 6 then hasDragged = true end
+        if hasDragged then handleDrag(input) end
+    end)
+
+    btn.InputEnded:Connect(function(input)
+        if input.UserInputType ~= Enum.UserInputType.MouseButton1
+            and input.UserInputType ~= Enum.UserInputType.Touch then return end
+        isDragging = false
+        TweenService:Create(btn,       TweenInfo.new(0.15, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Size = UDim2.new(0, 56, 0, 56) }):Play()
+        TweenService:Create(btnStroke, TweenInfo.new(0.15), { Color = Color3.fromHex("#64748B"), Thickness = 2.5 }):Play()
+        local tapDuration = tick() - tapStartTime
+        local moved       = (input.Position - (dragStartInput or input.Position)).Magnitude
+        if not hasDragged and moved < 10 and tapDuration < 0.35 then
+            pcall(function()
+                if window.Closed then window:Open() else window:Close() end
+            end)
+        end
+    end)
+
+    btn.MouseEnter:Connect(function()
+        TweenService:Create(btnStroke, TweenInfo.new(0.2), { Color = Color3.fromHex("#CBD5E1"), Thickness = 3.5 }):Play()
+    end)
+    btn.MouseLeave:Connect(function()
+        TweenService:Create(btnStroke, TweenInfo.new(0.2), { Color = Color3.fromHex("#64748B"), Thickness = 2.5 }):Play()
+    end)
+
+    if _G.KenHubConnections then
+        table.insert(_G.KenHubConnections, {
+            Disconnect = function() pcall(function() mobileGui:Destroy() end) end,
+        })
+    end
+    return mobileGui
+end
+
+-- ─── Window ──────────────────────────────────────────────────────────────────
+
+local window = windUI:CreateWindow({
+    Title       = "KenHub - Break & Steal an Egg",
+    Icon        = "rbxassetid://110165664140192",
+    IconSize    = 44,
+    Author      = "by KenHub",
+    Folder      = "KenHub_BreakAndStealAnEgg",
+    Size        = UDim2.fromOffset(630, 510),
+    Transparent = true,
+    Theme       = "Dark",
+    Resizable   = true,
+    OpenButton  = { Enabled = false },
+})
+
+_G.KenHubInstance = window
+
+pcall(function()
+    if window and window.UIElements and window.UIElements.Main and window.UIElements.Main.Main then
+        for _, child in ipairs(window.UIElements.Main.Main.Topbar.Left:GetChildren()) do
+            if child:IsA("Frame") and child.Name == "Frame" then
+                child.Size = UDim2.new(0, 44, 0, 44)
+                for _, sub in ipairs(child:GetChildren()) do
+                    if sub:IsA("Frame") then
+                        sub.Size        = UDim2.new(0, 44, 0, 44)
+                        sub.AnchorPoint = Vector2.new(0.5, 0.5)
+                        sub.Position    = UDim2.new(0.5, 0, 0.5, 0)
+                    end
+                end
+            end
+        end
+    end
+end)
+
+local mobileToggleGui = createMobileToggle(window)
+
+window:Tag({
+    Title  = "v1.0.4 [Key System Enabled]",
+    Icon   = "shield-check",
+    Color  = Color3.fromHex("#334155"),
+    Border = true,
+})
+
+-- ─── Utility Functions ───────────────────────────────────────────────────────
+
+local function getHRP()
+    local char = localPlayer.Character
+    return char and char:FindFirstChild("HumanoidRootPart")
+end
+
+local function getHumanoid()
+    local char = localPlayer.Character
+    return char and char:FindFirstChildOfClass("Humanoid")
+end
+
+local function getPlot()
+    local plots = workspace:FindFirstChild("Plots")
+    if not plots then return nil end
+    for _, plot in ipairs(plots:GetChildren()) do
+        if plot:GetAttribute("OwnerUserId") == localPlayer.UserId then return plot end
+    end
+    return nil
+end
+
+local function teleportToBase()
+    local plot = getPlot()
+    if not plot then
+        windUI:Notify({ Title = "Plot Not Found", Content = "Could not locate your base plot.", Duration = 3, Icon = "alert-triangle" })
+        return false
+    end
+    local anchor = plot:FindFirstChild("Hitbox") or plot:FindFirstChild("SpawnPoint")
+    if not anchor then return false end
+    local hrp = getHRP()
+    if hrp then
+        hrp.CFrame = anchor.CFrame + Vector3.new(0, 3.5, 0)
+        hrp.AssemblyLinearVelocity = Vector3.zero
+        return true
+    end
+    return false
+end
+
+local treadmillController
+pcall(function()
+    treadmillController = require(localPlayer.PlayerScripts.Client.Controllers.TreadmillHudController)
+end)
+
+local function unlockCharacter()
+    pcall(function() RunService:UnbindFromRenderStep("TreadmillFaceLock") end)
+    local hrp      = getHRP()
+    local humanoid = getHumanoid()
+    if hrp      then hrp.Anchored = false end
+    if humanoid then
+        humanoid.AutoRotate = true
+        humanoid.Jump = true
+        humanoid:ChangeState("Jumping")
+    end
+    task.wait(0.2)
+end
+
+local function isTreadmillActive()
+    local plot = getPlot()
+    if not plot then return false end
+    local ghost   = plot:FindFirstChild("Ghost Treadmill")
+    local hitbox  = ghost and (ghost:FindFirstChild("Hitbox") or ghost:FindFirstChildWhichIsA("BasePart"))
+    local hrp     = getHRP()
+    if hitbox and hrp and (hrp.Position - hitbox.Position).Magnitude > 8 then return false end
+    if treadmillController and treadmillController.IsActive then
+        local ok, active = pcall(function() return treadmillController.IsActive() end)
+        return ok and active or false
+    end
+    return false
+end
+
+local function ensureGlobalPlatform()
+    local existing = workspace:FindFirstChild("KenHub_GlobalPlatform")
+    if existing then return existing end
+
+    local folder = Instance.new("Folder")
+    folder.Name   = "KenHub_GlobalPlatform"
+    folder.Parent = workspace
+
+    for i, cframe in ipairs({ CFrame.new(-700, -6, 0), CFrame.new(-2200, -6, 0) }) do
+        local seg = Instance.new("Part")
+        seg.Name         = "UnderHighway_Segment" .. i
+        seg.Size         = Vector3.new(1600, 2, 320)
+        seg.CFrame       = cframe
+        seg.Anchored     = true
+        seg.CanCollide   = true
+        seg.Material     = Enum.Material.SmoothPlastic
+        seg.Color        = Color3.fromHex("#334155")
+        seg.Transparency = 0.25
+        seg.Parent       = folder
+    end
+    return folder
+end
+
+local function unequipTools()
+    local char    = localPlayer.Character
+    local backpack = localPlayer:FindFirstChild("Backpack")
+    if char and backpack then
+        for _, item in ipairs(char:GetChildren()) do
+            if item:IsA("Tool") then pcall(function() item.Parent = backpack end) end
+        end
+    end
+    local humanoid = getHumanoid()
+    if humanoid then pcall(function() humanoid:UnequipTools() end) end
+end
+
+local function teleportToTreadmill()
+    local plot = getPlot()
+    if not plot then return false end
+    local ghost  = plot:FindFirstChild("Ghost Treadmill")
+    if not ghost then
+        for _, desc in ipairs(plot:GetDescendants()) do
+            if desc.Name:find("Treadmill") then ghost = desc; break end
+        end
+    end
+    local hitbox   = ghost and (ghost:FindFirstChild("Hitbox") or ghost:FindFirstChildWhichIsA("BasePart"))
+    if not hitbox then return false end
+    local hrp      = getHRP()
+    local humanoid = getHumanoid()
+    if hrp and humanoid then
+        hrp.Anchored = false
+        hrp.CFrame   = hitbox.CFrame + Vector3.new(0, 1.5, 0)
+        hrp.AssemblyLinearVelocity = Vector3.zero
+        task.wait(0.2)
+        humanoid:Move(Vector3.new(0, 0, -1), true)
+        task.wait(0.35)
+        return true
+    end
+    return false
+end
+
+local function equipBat()
+    local char    = localPlayer.Character
+    if not char then return end
+    if char:FindFirstChild("Bat") then return end
+    local backpack = localPlayer:FindFirstChild("Backpack")
+    if not backpack then return end
+    local bat      = backpack:FindFirstChild("Bat")
+    local humanoid = getHumanoid()
+    if humanoid and bat then humanoid:EquipTool(bat) end
+end
+
+local function destroyGlobalPlatform()
+    local p = workspace:FindFirstChild("KenHub_GlobalPlatform")
+    if p then pcall(function() p:Destroy() end) end
+end
+
+local function destroyNinjaPlatform()
+    local p = workspace:FindFirstChild("KenHub_NinjaPlatform")
+    if p then pcall(function() p:Destroy() end) end
+end
+
+local function equipPickaxe()
+    local char    = localPlayer.Character
+    if not char then return end
+    if char:FindFirstChild("Pickaxe") then return end
+    local backpack = localPlayer:FindFirstChild("Backpack")
+    if not backpack then return end
+    local pickaxe = backpack:FindFirstChild("Pickaxe")
+    if not pickaxe then
+        for _, tool in ipairs(backpack:GetChildren()) do
+            if tool:IsA("Tool") and (tool.Name:lower():find("pickaxe") or tool:GetAttribute("PickaxeTier")) then
+                pickaxe = tool; break
+            end
+        end
+    end
+    if pickaxe then
+        pickaxe.Parent = char
+        local humanoid = getHumanoid()
+        if humanoid then pcall(function() humanoid:EquipTool(pickaxe) end) end
+    end
+end
+
+-- ─── Raycast / Position Helpers ──────────────────────────────────────────────
+
+local function getGroundY(position, refPart)
+    local params   = RaycastParams.new()
+    local excluded = {}
+
+    for _, egg in ipairs(CollectionService:GetTagged("BreakableEgg")) do
+        table.insert(excluded, egg)
+        if egg.Parent and egg.Parent:IsA("Model") then table.insert(excluded, egg.Parent) end
+    end
+    if localPlayer.Character then table.insert(excluded, localPlayer.Character) end
+    local gp = workspace:FindFirstChild("KenHub_GlobalPlatform")
+    local np = workspace:FindFirstChild("KenHub_NinjaPlatform")
+    if gp then table.insert(excluded, gp) end
+    if np then table.insert(excluded, np) end
+
+    params.FilterDescendantsInstances = excluded
+    params.FilterType = Enum.RaycastFilterType.Exclude
+
+    local startY = (position and position.Y or 3) + 2
+    if refPart and refPart:IsA("BasePart") then startY = refPart.Position.Y + 2 end
+
+    local result = workspace:Raycast(Vector3.new(position.X, startY, position.Z), Vector3.new(0, -50, 0), params)
+    if result then return result.Position.Y end
+    return position and position.Y > 5 and position.Y - 2 or 0.5
+end
+
+local function getUnderPosition(position, refPart, depth)
+    local groundY      = getGroundY(position, refPart)
+    local clampedDepth = math.clamp(depth or 2.8, 1.5, 4)
+    return Vector3.new(position.X, groundY - clampedDepth, position.Z), groundY
+end
+
+-- ─── Rarity System ───────────────────────────────────────────────────────────
+
+local rarityMap = {}
+
+local rarityRank = {
+    common=1, uncommon=2, rare=3, epic=4, legendary=5,
+    mythic=6, divine=7, cosmic=8, secret=9, celestial=10, inferno=11,
+}
+
+local rarityFilterThreshold = {
+    ["Inferno and Above"]=11, ["Celestial and Above"]=10, ["Secret and Above"]=9,
+    ["Cosmic and Above"]=8,   ["Divine and Above"]=7,     ["Mythic and Above"]=6,
+    ["Legendary and Above"]=5,["Epic and Above"]=4,       ["Rare and Above"]=3,
+    ["Uncommon and Above"]=2, ["Any Rarity"]=1,
+}
+
+local function parseAnimalLabel(label)
+    if not label then return "Unknown", 0, "Common" end
+    local weightStr = label:match("%[([%d%.,]+)%s*[Kk][Gg]%]")
+    local weightKg  = weightStr and tonumber((weightStr:gsub(",", ""))) or 0
+    local name      = label:gsub("<[^>]+>", ""):gsub("%[[^%]]+%]%s*", ""):match("^%s*(.-)%s*$") or "Unknown"
+    return name, weightKg, rarityMap[name:lower():gsub("%s+", "")] or "Common"
+end
+
+local function meetsRarityFilter(label, _, filter)
+    if not filter or filter == "Any Rarity" then return true end
+    local _, _, rarity = parseAnimalLabel(label)
+    return (rarityRank[rarity:lower()] or 1) >= (rarityFilterThreshold[filter] or 1)
+end
+
+-- ─── Tab Builder Helper ──────────────────────────────────────────────────────
+
+local function buildTab(_, name, buildFn)
+    local t0 = os.clock()
+    local ok, err = xpcall(buildFn, function(e)
+        return debug and debug.traceback and debug.traceback(tostring(e), 2) or tostring(e)
+    end)
+    if not ok then
+        warn(("[KenHub %s Error]: %s"):format(name, tostring(err)))
+    else
+        print(("[KenHub] %s tab built in %.2fs"):format(name, os.clock() - t0))
+    end
+    task.wait()
+end
+
+-- ─── Tabs ────────────────────────────────────────────────────────────────────
+
+local ninjaStealTab = window:Tab({ Title = "Ninja Steal", Icon = "crosshair" })
+local autoFarmTab   = window:Tab({ Title = "Auto Farm",   Icon = "flame"     })
+local combatTab     = window:Tab({ Title = "Combat",      Icon = "swords"    })
+local teleportsTab  = window:Tab({ Title = "Teleports",   Icon = "map-pin"   })
+local visualsTab    = window:Tab({ Title = "Visuals",     Icon = "eye"       })
+local playerTab     = window:Tab({ Title = "Player",      Icon = "user"      })
+local settingsTab   = window:Tab({ Title = "Settings",    Icon = "settings"  })
+
+-- ─── Ninja Steal Tab ─────────────────────────────────────────────────────────
+
+buildTab(ninjaStealTab, "Ninja Steal", function()
+    local s = ninjaStealTab:Section({ Title = "Under-Egg Ninja Snatcher", Opened = true })
+
+    s:Paragraph({ Title = "Ninja Snatch Strategy", Desc = "Hides under breaking eggs to steal pets, then runs back to base." })
+
+    s:Toggle({
+        Title = "Enable Under-Egg Ninja Steal",
+        Desc  = "Wait under low HP eggs, snatch dropped pet and return to base",
+        Value = state.NinjaSteal,
+        Callback = function(v)
+            state.NinjaSteal = v
+            if v then
+                ensureGlobalPlatform()
+            else
+                destroyNinjaPlatform()
+                if not state.AutoBreakUnder then destroyGlobalPlatform() end
+                pcall(function()
+                    local char = localPlayer.Character
+                    if char and char:FindFirstChild("HumanoidRootPart") then
+                        char.HumanoidRootPart.Anchored = false
+                    end
+                end)
+            end
+        end,
+    })
+
+    s:Toggle({
+        Title = "Stealth Treadmill Run (When Idle)",
+        Desc  = "Runs on your base treadmill while waiting for eggs to reach low HP",
+        Value = state.NinjaStealthRun,
+        Callback = function(v) state.NinjaStealthRun = v end,
+    })
+
+    s:Slider({
+        Title = "Under-Egg Depth",
+        Desc  = "Studs underground beneath the egg while waiting to steal",
+        Step  = 0.1,
+        Value = { Min = 1.5, Max = 6, Default = state.UnderDepth or 2.8 },
+        Callback = function(v)
+            state.UnderDepth = type(v) == "number" and v or (type(v) == "table" and (v.Default or v.Value)) or 2.8
+        end,
+    })
+
+    s:Dropdown({
+        Title  = "Rarity Target Filter",
+        Desc   = "Minimum animal rarity required to trigger ninja steal teleport",
+        Values = {
+            "Any Rarity","Inferno and Above","Celestial and Above","Secret and Above",
+            "Cosmic and Above","Divine and Above","Mythic and Above","Legendary and Above",
+            "Epic and Above","Rare and Above","Uncommon and Above",
+        },
+        Value    = state.TargetRarity or "Cosmic and Above",
+        Callback = function(v) state.TargetRarity = v end,
+    })
+
+    s:Toggle({
+        Title    = "Instant Base Return on Grab",
+        Desc     = "Teleport back to plot immediately upon collecting the stolen pet",
+        Value    = state.InstantReturn,
+        Callback = function(v) state.InstantReturn = v end,
+    })
+
+    s:Toggle({
+        Title = "Anti-Fall Safety Platform",
+        Desc  = "Keeps an invisible barrier beneath the map so you never fall into void",
+        Value = state.AntiFall,
+        Callback = function(v)
+            state.AntiFall = v
+            if v then ensureGlobalPlatform() end
+        end,
+    })
+
+    s:Button({
+        Title    = "Manual Instant Escape to Base",
+        Desc     = "Instantly teleports your character back to your plot",
+        Callback = function()
+            if teleportToBase() then
+                windUI:Notify({ Title = "Teleported", Content = "Returned to base plot successfully!", Duration = 2, Icon = "check" })
+            end
+        end,
+    })
+end)
+
+-- ─── Auto Farm Tab ───────────────────────────────────────────────────────────
+
+buildTab(autoFarmTab, "Auto Farm", function()
+    local breakSec = autoFarmTab:Section({ Title = "Under-Egg Breaker", Opened = true })
+
+    breakSec:Paragraph({ Title = "Under-Ground Hit Mechanic", Desc = "Tweens smoothly under eggs with anti-void stability." })
+
+    breakSec:Toggle({
+        Title = "Auto Farm Eggs (Under-Egg Mode)",
+        Desc  = "Smoothly tweens beneath eggs and automatically swings your pickaxe",
+        Value = state.AutoBreakUnder,
+        Callback = function(v)
+            state.AutoBreakUnder = v
+            if v then
+                ensureGlobalPlatform()
+                equipPickaxe()
+            else
+                destroyNinjaPlatform()
+                if not state.NinjaSteal then destroyGlobalPlatform() end
+                pcall(function()
+                    local char = localPlayer.Character
+                    if char and char:FindFirstChild("HumanoidRootPart") then
+                        char.HumanoidRootPart.Anchored = false
+                    end
+                end)
+            end
+        end,
+    })
+
+    breakSec:Toggle({
+        Title    = "Egg Breaker Aura (No Movement)",
+        Desc     = "Attacks nearby eggs within reach without moving your character",
+        Value    = state.AutoBreakAura,
+        Callback = function(v) state.AutoBreakAura = v; if v then equipPickaxe() end end,
+    })
+
+    breakSec:Dropdown({
+        Title  = "Target Egg Type",
+        Desc   = "Select which egg type to target or choose All Eggs",
+        Values = { "All Eggs","Fortune Egg","Blossom Egg","Bamboo Egg","Sun Egg",
+                   "Starry Egg","Sea Egg","Angel Egg","Tree Egg","Cactus Egg","Frozen Egg" },
+        Value    = state.TargetEggType,
+        Callback = function(v) state.TargetEggType = v end,
+    })
+
+    breakSec:Dropdown({
+        Title    = "Target Weight Bracket",
+        Desc     = "Filter eggs by weight bracket: Any, TITANIC, HUGE, or BIG",
+        Values   = { "Any","TITANIC","HUGE","BIG","Normal" },
+        Value    = state.TargetWeight,
+        Callback = function(v) state.TargetWeight = v end,
+    })
+
+    breakSec:Slider({
+        Title = "Under-Egg Hit Depth",
+        Desc  = "Depth in studs below the egg surface while mining underground",
+        Step  = 0.1,
+        Value = { Min = 1.5, Max = 6, Default = state.UnderFarmDepth or 2.8 },
+        Callback = function(v)
+            state.UnderFarmDepth = type(v) == "number" and v or (type(v) == "table" and (v.Default or v.Value)) or 2.8
+        end,
+    })
+
+    breakSec:Toggle({
+        Title    = "Auto Equip Best Pickaxe",
+        Desc     = "Automatically equips your strongest available pickaxe",
+        Value    = state.AutoEquipPickaxe,
+        Callback = function(v) state.AutoEquipPickaxe = v; if v then equipPickaxe() end end,
+    })
+
+    local treadSec = autoFarmTab:Section({ Title = "Treadmill Runner", Opened = true })
+
+    treadSec:Toggle({
+        Title = "Auto Farm Treadmill (Run)",
+        Desc  = "Runs on your base plot treadmill to train speed continuously",
+        Value = state.AutoTreadmill,
+        Callback = function(v)
+            state.AutoTreadmill = v
+            if v then
+                if state.TreadmillUnequip then unequipTools() end
+                teleportToTreadmill()
+            else
+                unlockCharacter()
+            end
+        end,
+    })
+
+    treadSec:Toggle({
+        Title = "Stealth Unequip on Treadmill",
+        Desc  = "Unequips all held tools while running on treadmill to blend in",
+        Value = state.TreadmillUnequip,
+        Callback = function(v)
+            state.TreadmillUnequip = v
+            if v and state.AutoTreadmill then unequipTools() end
+        end,
+    })
+
+    local plotSec = autoFarmTab:Section({ Title = "Plot & Automation", Opened = true })
+
+    plotSec:Toggle({ Title="Auto Upgrade Plot",        Desc="Automatically purchases available base plot upgrades",           Value=state.AutoUpgradePlot,     Callback=function(v) state.AutoUpgradePlot=v     end })
+    plotSec:Toggle({ Title="Auto Upgrade Treadmill",   Desc="Automatically levels up your treadmill for higher training",     Value=state.AutoUpgradeTreadmill,Callback=function(v) state.AutoUpgradeTreadmill=v end })
+    plotSec:Toggle({ Title="Auto Buy Next Pickaxe",    Desc="Automatically buys the next pickaxe tier when affordable",       Value=state.AutoBuyPickaxe,      Callback=function(v) state.AutoBuyPickaxe=v      end })
+    plotSec:Toggle({ Title="Auto Bank Carried Animals",Desc="Automatically deposits carried pets into your base storage",     Value=state.AutoBankAnimals,     Callback=function(v) state.AutoBankAnimals=v     end })
+end)
+
+-- ─── Combat Tab ──────────────────────────────────────────────────────────────
+
+buildTab(combatTab, "Combat", function()
+    local s = combatTab:Section({ Title = "Bat Defense & Knockback", Opened = true })
+
+    s:Toggle({
+        Title = "Auto Bat Knockback Aura",
+        Desc  = "Swings bat automatically to knock away players or guards nearby",
+        Value = state.AutoBatAura,
+        Callback = function(v) state.AutoBatAura = v; if v then equipBat() end end,
+    })
+
+    s:Slider({
+        Title = "Bat Aura Distance",
+        Desc  = "Maximum detection radius in studs for bat knockback",
+        Step  = 1,
+        Value = { Min = 5, Max = 30, Default = state.BatRange or 15 },
+        Callback = function(v)
+            state.BatRange = type(v) == "number" and v or (type(v) == "table" and (v.Default or v.Value)) or 15
+        end,
+    })
+
+    s:Toggle({ Title="Target Other Players", Desc="Enables bat knockback against nearby rival players", Value=state.TargetPlayers, Callback=function(v) state.TargetPlayers=v end })
+    s:Toggle({ Title="Target Guard NPCs",    Desc="Enables bat knockback against attacking guard NPCs", Value=state.TargetGuards,  Callback=function(v) state.TargetGuards=v  end })
+end)
+
+-- ─── Teleports Tab ───────────────────────────────────────────────────────────
+
+buildTab(teleportsTab, "Teleports", function()
+    local landmarkSec = teleportsTab:Section({ Title = "Main Landmarks", Opened = true })
+
+    landmarkSec:Button({
+        Title = "Teleport to My Base Plot", Desc = "Instantly teleports you to your personal base plot",
+        Callback = function() unlockCharacter(); teleportToBase() end,
+    })
+
+    landmarkSec:Button({
+        Title = "Teleport to My Treadmill", Desc = "Teleports your character directly onto your base treadmill",
+        Callback = function() teleportToTreadmill() end,
+    })
+
+    landmarkSec:Button({
+        Title = "Teleport to Egg Machine", Desc = "Teleports your character directly to the central egg machine",
+        Callback = function()
+            unlockCharacter()
+            local machine = workspace:FindFirstChild("EggMachine")
+            local hrp = getHRP()
+            if machine and hrp then
+                local part = machine:FindFirstChildWhichIsA("BasePart", true)
+                if part then hrp.CFrame = part.CFrame + Vector3.new(0, 4, 0) end
+            end
+        end,
+    })
+
+    landmarkSec:Button({
+        Title = "Teleport to Leaderboards", Desc = "Teleports your character to the global leaderboards area",
+        Callback = function()
+            unlockCharacter()
+            local lb  = workspace:FindFirstChild("Leaderboards")
+            local hrp = getHRP()
+            if lb and hrp then
+                local part = lb:FindFirstChildWhichIsA("BasePart", true)
+                if part then hrp.CFrame = part.CFrame + Vector3.new(0, 4, 0) end
+            end
+        end,
+    })
+
+    local zoneSec = teleportsTab:Section({ Title = "Zone Teleports", Opened = true })
+
+    local zoneCoords = {
+        ["Zone 1"]=Vector3.new(-154,3,-72),   ["Zone 2"]=Vector3.new(-245,36,120),
+        ["Zone 3"]=Vector3.new(-332,3,33),    ["Zone 4"]=Vector3.new(-578,14,-120),
+        ["Zone 5"]=Vector3.new(-865,3,-60),   ["Zone 6"]=Vector3.new(-1136,14,120),
+        ["Zone 7"]=Vector3.new(-1660,3,-89),  ["Zone 8"]=Vector3.new(-2084,36,-120),
+        ["Zone 9"]=Vector3.new(-2603,3,0),
+    }
+    local selectedZone = "Zone 1"
+
+    zoneSec:Dropdown({
+        Title    = "Select Destination Zone", Desc = "Choose the target zone map to teleport to",
+        Values   = { "Zone 1","Zone 2","Zone 3","Zone 4","Zone 5","Zone 6","Zone 7","Zone 8","Zone 9" },
+        Value    = selectedZone,
+        Callback = function(v) selectedZone = v end,
+    })
+
+    zoneSec:Button({
+        Title = "Teleport to Selected Zone", Desc = "Teleports your character to the chosen zone spawn coordinates",
+        Callback = function()
+            unlockCharacter()
+            local coord = zoneCoords[selectedZone]
+            local hrp   = getHRP()
+            if hrp and coord then
+                hrp.CFrame = CFrame.new(coord + Vector3.new(0, 3, 0))
+                hrp.AssemblyLinearVelocity = Vector3.zero
+                windUI:Notify({ Title="Teleported", Content="Arrived at "..selectedZone, Duration=2, Icon="map-pin" })
+            end
+        end,
+    })
+end)
+
+-- ─── ESP Folder Setup ────────────────────────────────────────────────────────
+
+local espFolder = Instance.new("Folder")
+espFolder.Name  = "KenHub_ESP"
+pcall(function()
+    local old = CoreGui:FindFirstChild("KenHub_ESP")
+    if old then old:Destroy() end
+    espFolder.Parent = CoreGui
+end)
+
+-- ─── Visuals Tab ─────────────────────────────────────────────────────────────
+
+buildTab(visualsTab, "Visuals", function()
+    local s = visualsTab:Section({ Title = "Visual Sensors & ESP", Opened = true })
+
+    s:Toggle({
+        Title = "Egg ESP", Desc = "Highlights active breakable eggs across the map",
+        Value = state.EggESP,
+        Callback = function(v) state.EggESP = v end,
+    })
+
+    s:Toggle({
+        Title = "Animal Pickup ESP", Desc = "Highlights dropped animal pickups across the map",
+        Value = state.PickupESP,
+        Callback = function(v) state.PickupESP = v end,
+    })
+
+    s:Toggle({
+        Title = "Player ESP", Desc = "Highlights other players in the game",
+        Value = state.PlayerESP,
+        Callback = function(v) state.PlayerESP = v end,
+    })
+
+    s:Toggle({
+        Title    = "Rare Egg Spawn Notifier", Desc = "Sends a notification whenever a rare or titanic egg spawns",
+        Value    = state.RareNotifier,
+        Callback = function(v) state.RareNotifier = v end,
+    })
+end)
+
+-- ─── ESP Engine ──────────────────────────────────────────────────────────────
+
+task.spawn(function()
+    local activeHighlights = {}
+
+    while true do
+        pcall(function()
+            local currentTracking = {}
+
+            if state.EggESP then
+                for _, egg in ipairs(CollectionService:GetTagged("BreakableEgg")) do
+                    if egg and egg.Parent then
+                        currentTracking[egg] = {Type = "Egg", Color = Color3.fromRGB(100, 116, 139)}
+                    end
+                end
+            end
+
+            if state.PickupESP then
+                for _, pickup in ipairs(CollectionService:GetTagged("AnimalPickup")) do
+                    if pickup and pickup.Parent then
+                        currentTracking[pickup] = {Type = "Pickup", Color = Color3.fromRGB(148, 163, 184)}
+                    end
+                end
+            end
+
+            if state.PlayerESP then
+                for _, plr in ipairs(Players:GetPlayers()) do
+                    if plr ~= localPlayer and plr.Character and plr.Character.Parent then
+                        currentTracking[plr.Character] = {Type = "Player", Color = Color3.fromRGB(71, 85, 105)}
+                    end
+                end
+            end
+
+            for target, hl in pairs(activeHighlights) do
+                if not currentTracking[target] or not target.Parent then
+                    if hl then hl:Destroy() end
+                    activeHighlights[target] = nil
+                end
+            end
+
+            for target, data in pairs(currentTracking) do
+                local hl = activeHighlights[target]
+                if not hl or not hl.Parent then
+                    hl = Instance.new("Highlight")
+                    hl.Name = "KenHub_Highlight"
+                    hl.Adornee = target
+                    hl.FillColor = data.Color
+                    hl.OutlineColor = Color3.fromRGB(241, 245, 249)
+                    hl.FillTransparency = 0.5
+                    hl.OutlineTransparency = 0
+                    hl.Parent = espFolder
+                    activeHighlights[target] = hl
+                end
+            end
+        end)
+        task.wait(1)
+    end
+end)
+
+-- ─── Player Tab ──────────────────────────────────────────────────────────────
+
+buildTab(playerTab, "Player", function()
+    local s = playerTab:Section({ Title = "Movement & Physics", Opened = true })
+
+    s:Slider({
+        Title = "WalkSpeed", Desc = "Adjust your character movement walk speed in studs per second",
+        Step = 1, Value = { Min=16, Max=250, Default=state.WalkSpeed or 16 },
+        Callback = function(v)
+            local spd = type(v)=="number" and v or (type(v)=="table" and (v.Default or v.Value)) or 16
+            state.WalkSpeed = spd
+            local h = getHumanoid(); if h then h.WalkSpeed = spd end
+        end,
+    })
+
+    s:Slider({
+        Title = "JumpPower", Desc = "Adjust your character jump height power",
+        Step = 5, Value = { Min=50, Max=300, Default=state.JumpPower or 50 },
+        Callback = function(v)
+            local pwr = type(v)=="number" and v or (type(v)=="table" and (v.Default or v.Value)) or 50
+            state.JumpPower = pwr
+            local h = getHumanoid(); if h then h.UseJumpPower = true; h.JumpPower = pwr end
+        end,
+    })
+
+    s:Toggle({ Title="Infinite Jump", Desc="Allows jumping continuously mid-air",            Value=state.InfiniteJump, Callback=function(v) state.InfiniteJump=v end })
+    s:Toggle({ Title="Noclip",        Desc="Walk through walls and obstacles",                Value=state.Noclip,       Callback=function(v) state.Noclip=v       end })
+    s:Toggle({ Title="Flight Mode",   Desc="Fly freely using WASD and camera orientation",   Value=state.Fly,          Callback=function(v) state.Fly=v           end })
+
+    s:Slider({
+        Title = "Flight Speed", Desc = "Flying speed multiplier when flight mode is enabled",
+        Step = 5, Value = { Min=20, Max=200, Default=state.FlySpeed or 50 },
+        Callback = function(v)
+            state.FlySpeed = type(v)=="number" and v or (type(v)=="table" and (v.Default or v.Value)) or 50
+        end,
+    })
+end)
+
+-- ─── Settings Tab ────────────────────────────────────────────────────────────
+
+buildTab(settingsTab, "Settings", function()
+    local uiSec = settingsTab:Section({ Title = "Interface & Controls", Opened = true })
+
+    uiSec:Keybind({
+        Title = "Toggle Menu Keybind", Desc = "Key to show or hide the KenHub interface",
+        Default = Enum.KeyCode.RightShift,
+        Callback = function() window:Toggle() end,
+    })
+
+    uiSec:Toggle({
+        Title = "Mobile Floating Button", Desc = "Show or hide the draggable mobile toggle icon",
+        Default = true,
+        Callback = function(v) if mobileToggleGui then mobileToggleGui.Enabled = v end end,
+    })
+
+    uiSec:Dropdown({
+        Title = "Window Theme", Desc = "Switch between visual color palettes and themes",
+        Values = { "Dark","Rose","Plant","Indigo" }, Value = "Dark",
+        Callback = function(v) pcall(function() windUI:SetTheme(v) end) end,
+    })
+
+    uiSec:Button({
+        Title = "Unload / Close KenHub", Desc = "Disconnects all loops and removes the UI",
+        Callback = function()
+            if _G.KenHubConnections then
+                for _, conn in ipairs(_G.KenHubConnections) do
+                    local c = conn; pcall(function() c:Disconnect() end)
+                end
+            end
+            _G.KenHubConnections = {}
+            destroyNinjaPlatform()
+            destroyGlobalPlatform()
+            unlockCharacter()
+            pcall(function() espFolder:Destroy() end)
+            if mobileToggleGui then pcall(function() mobileToggleGui:Destroy() end) end
+            if window then window:Destroy() end
+        end,
+    })
+
+    local profileSec = settingsTab:Section({ Title = "Profiles & AutoLoad", Opened = true })
+
+    if makefolder then
+        pcall(function()
+            if not isfolder("KenHub_BreakAndStealAnEgg")        then makefolder("KenHub_BreakAndStealAnEgg")              end
+            if not isfolder("KenHub_BreakAndStealAnEgg/configs") then makefolder("KenHub_BreakAndStealAnEgg/configs") end
+        end)
+    end
+
+    local function listProfiles()
+        local list = {}
+        if listfiles and isfolder and isfolder("KenHub_BreakAndStealAnEgg/configs") then
+            pcall(function()
+                for _, path in ipairs(listfiles("KenHub_BreakAndStealAnEgg/configs")) do
+                    local name = path:match("([^\\/]+)%.json$")
+                    if name and name ~= "autoload" then table.insert(list, name) end
+                end
+            end)
+        end
+        table.sort(list)
+        if #list == 0 then table.insert(list, "default") end
+        return list
+    end
+
+    local function saveProfile(name)
+        if not writefile then return false, "writefile not supported" end
+        if not name or name == "" or name == "autoload" then return false, "Invalid profile name" end
+        local snapshot = {}
+        for k, v in pairs(state) do snapshot[k] = v end
+        local ok, encoded = pcall(function() return HttpService:JSONEncode(snapshot) end)
+        if not ok then return false, "JSON encoding error" end
+        local wok, werr = pcall(function() writefile("KenHub_BreakAndStealAnEgg/configs/"..name..".json", encoded) end)
+        if not wok then return false, tostring(werr) end
+        return true
+    end
+
+    local function loadProfile(name)
+        if not readfile or not isfile then return false, "readfile not supported" end
+        if not name or name == "" or name == "autoload" then return false, "Invalid profile name" end
+        local path = "KenHub_BreakAndStealAnEgg/configs/"..name..".json"
+        if not isfile(path) then return false, "Profile file not found" end
+        local rok, content = pcall(function() return readfile(path) end)
+        if not rok or not content then return false, "Failed to read profile" end
+        local dok, decoded = pcall(function() return HttpService:JSONDecode(content) end)
+        if not dok or type(decoded) ~= "table" then return false, "Corrupted profile data" end
+        for k, v in pairs(decoded) do state[k] = v end
+        return true
+    end
+
+    local autoLoadEnabled = false
+    local activeProfile   = "default"
+
+    pcall(function()
+        if readfile and isfile and isfile("KenHub_BreakAndStealAnEgg/configs/autoload.json") then
+            local data = HttpService:JSONDecode(readfile("KenHub_BreakAndStealAnEgg/configs/autoload.json"))
+            if data and data.AutoLoad then
+                autoLoadEnabled = true
+                if data.Profile then activeProfile = data.Profile end
+            end
+        end
+    end)
+
+    local selectProfileDropdown
+
+    local function refreshProfileDropdown(selectName)
+        local profiles = listProfiles()
+        if selectProfileDropdown and selectProfileDropdown.SetValues then
+            selectProfileDropdown:SetValues(profiles)
+            if selectName then pcall(function() selectProfileDropdown:Set(selectName) end) end
+        end
+    end
+
+    profileSec:Input({
+        Title = "Profile Name", Desc = "Enter the profile file name to save or load",
+        Placeholder = "e.g. default, farm_setup", Value = activeProfile,
+        Callback = function(v) if v and v ~= "" then activeProfile = v end end,
+    })
+
+    selectProfileDropdown = profileSec:Dropdown({
+        Title = "Select Profile", Desc = "Select an existing saved configuration profile",
+        Values = listProfiles(), Value = activeProfile,
+        Callback = function(v) if v and v ~= "" then activeProfile = v end end,
+    })
+
+    profileSec:Button({
+        Title = "Save Current Config", Desc = "Saves all current toggles and settings to the selected profile",
+        Callback = function()
+            local ok, err = saveProfile(activeProfile)
+            if ok then
+                refreshProfileDropdown(activeProfile)
+                windUI:Notify({ Title="Profile Saved", Content=("Saved '%s.json' successfully!"):format(activeProfile), Duration=3, Icon="check" })
+            else
+                windUI:Notify({ Title="Save Error", Content=tostring(err), Duration=3, Icon="x" })
+            end
+        end,
+    })
+
+    profileSec:Button({
+        Title = "Load Selected Config", Desc = "Loads all settings from the selected profile file",
+        Callback = function()
+            local ok, err = loadProfile(activeProfile)
+            if ok then
+                refreshProfileDropdown(activeProfile)
+                windUI:Notify({ Title="Profile Loaded", Content=("Loaded '%s.json' successfully!"):format(activeProfile), Duration=3, Icon="check" })
+            else
+                windUI:Notify({ Title="Load Error", Content=tostring(err), Duration=3, Icon="x" })
+            end
+        end,
+    })
+
+    profileSec:Toggle({
+        Title = "Auto Load Profile On Startup", Desc = "Automatically loads your active configuration when script runs",
+        Value = autoLoadEnabled,
+        Callback = function(v)
+            autoLoadEnabled = v
+            pcall(function()
+                writefile(
+                    "KenHub_BreakAndStealAnEgg/configs/autoload.json",
+                    HttpService:JSONEncode({ AutoLoad = v, Profile = activeProfile })
+                )
+            end)
+        end,
+    })
+
+    if autoLoadEnabled then
+        pcall(function() loadProfile(activeProfile) end)
+    end
+end)
+
+-- ─── Ninja Snatch Executor ───────────────────────────────────────────────────
+
+local isSnatching = false
+
+local function executeNinjaSnatch(targetPos, prompt, animalName)
+    if isSnatching then return end
+    isSnatching = true
+    unlockCharacter()
+
+    local hrp      = getHRP()
+    local humanoid = getHumanoid()
+    if not hrp or not humanoid then isSnatching = false; return end
+
+    if localPlayer.Character then
+        for _, part in ipairs(localPlayer.Character:GetDescendants()) do
+            if part:IsA("BasePart") then pcall(function() part.CanCollide = false end) end
+        end
+    end
+
+    ensureGlobalPlatform()
+    local underPos = getUnderPosition(targetPos, nil, state.UnderDepth or 2.8)
+
+    hrp.Anchored = false
+    hrp.CFrame   = CFrame.new(underPos)
+    hrp.AssemblyLinearVelocity = Vector3.zero
+    task.wait(0.12)
+
+    if prompt and prompt.Parent then
+        pcall(function()
+            prompt.HoldDuration          = 0
+            prompt.MaxActivationDistance = 9999
+            prompt.RequiresLineOfSight   = false
+        end)
+    end
+
+    local snatchStart = os.clock()
+    local snatched    = false
+
+    windUI:Notify({ Title="Ninja Snatch!", Content=("Snatching %s (Instant E)..."):format(animalName or "Animal"), Duration=3, Icon="target" })
+
+    while state.NinjaSteal and os.clock() - snatchStart < 4 do
+        if hrp and (hrp.Position - underPos).Magnitude > 4 then
+            hrp.CFrame = CFrame.new(underPos)
+            hrp.AssemblyLinearVelocity = Vector3.zero
+        end
+
+        local carrying   = localPlayer:GetAttribute("Carrying")
+        local carryCount = localPlayer:GetAttribute("CarryCount")
+
+        if carrying ~= nil or (carryCount and carryCount > 0) then
+            snatched = true; break
+        elseif prompt and prompt.Parent then
+            pcall(function()
+                prompt.HoldDuration          = 0
+                prompt.MaxActivationDistance = 9999
+                prompt.RequiresLineOfSight   = false
+            end)
+            if fireproximityprompt then pcall(function() fireproximityprompt(prompt, 0) end) end
+            pcall(function() prompt:InputHoldBegin(); task.wait(); prompt:InputHoldEnd() end)
+            task.wait(0.05)
+        else
+            task.wait(0.08)
+            if localPlayer:GetAttribute("Carrying") ~= nil then snatched = true end
+            break
+        end
+    end
+
+    destroyNinjaPlatform()
+
+    if localPlayer.Character then
+        for _, part in ipairs(localPlayer.Character:GetDescendants()) do
+            local p = part
+            if p:IsA("BasePart") and not p:IsA("Terrain") then
+                pcall(function() p.CanCollide = true end)
+            end
+        end
+    end
+
+    if snatched or localPlayer:GetAttribute("Carrying") ~= nil then
+        windUI:Notify({ Title="Snatch Success!", Content=("Secured %s! Banking at base..."):format(animalName or "Animal"), Duration=3, Icon="sparkles" })
+        task.wait(0.05)
+        teleportToBase()
+        task.wait(0.3)
+        local bankWait = os.clock()
+        while localPlayer:GetAttribute("Carrying") ~= nil and os.clock() - bankWait < 4 do
+            task.wait(0.15)
+        end
+    else
+        windUI:Notify({ Title="Snatch Missed", Content="Prompt expired or taken. Returning...", Duration=2, Icon="x" })
+    end
+
+    if hrp then hrp.Anchored = false end
+
+    if state.NinjaStealthRun and not state.AutoBreakUnder then
+        unequipTools(); task.wait(0.1); teleportToTreadmill()
+    end
+
+    isSnatching = false
+end
+
+-- ─── Main Loops ──────────────────────────────────────────────────────────────
+
+task.spawn(function()
+    while true do
+        if state.NinjaSteal and not isSnatching and not localPlayer:GetAttribute("Carrying") then
+            for _, anchor in ipairs(workspace:GetChildren()) do
+                if anchor.Name == "PromptAnchor" then
+                    local prompt = anchor:FindFirstChild("StealPrompt") or anchor:FindFirstChild("HatchPrompt")
+                    if prompt and prompt:IsA("ProximityPrompt") and prompt.Enabled then
+                        local objectText = prompt.ObjectText or "Animal"
+                        if meetsRarityFilter(objectText, "", state.TargetRarity) then
+                            executeNinjaSnatch(anchor.Position, prompt, objectText); break
+                        end
+                    end
+                end
+            end
+
+            if not isSnatching then
+                for _, pickup in ipairs(CollectionService:GetTagged("AnimalPickup")) do
+                    if pickup:IsA("Model") and pickup.Parent then
+                        local rarity = pickup:GetAttribute("Rarity") or ""
+                        local weight = pickup:GetAttribute("WeightBracket") or ""
+                        if meetsRarityFilter(rarity.." "..pickup.Name, weight, state.TargetRarity) then
+                            local part = pickup.PrimaryPart or pickup:FindFirstChildWhichIsA("BasePart")
+                            if part then
+                                executeNinjaSnatch(part.Position, pickup:FindFirstChildWhichIsA("ProximityPrompt", true), pickup.Name)
+                                break
+                            end
+                        end
+                    end
+                end
+            end
+
+            if state.NinjaStealthRun and not isSnatching and not state.AutoBreakUnder then
+                if not isTreadmillActive() then
+                    local plot = getPlot()
+                    if plot then
+                        local ghost  = plot:FindFirstChild("Ghost Treadmill")
+                        local hitbox = ghost and (ghost:FindFirstChild("Hitbox") or ghost:FindFirstChildWhichIsA("BasePart"))
+                        local hrp    = getHRP()
+                        if hitbox and hrp and (hrp.Position - hitbox.Position).Magnitude > 8 then
+                            unequipTools(); teleportToTreadmill()
+                        end
+                    end
+                end
+            end
+        end
+        task.wait(0.3)
+    end
+end)
+
+-- ─── Advanced Tween Auto-Farm Loop (Under-to-Up & Safe Anti-Void) ─────────────
+local currentEgg      = nil
+local swingController = nil
+local activeTween     = nil
+
+task.spawn(function()
+    local eggHitRequest = ReplicatedStorage:FindFirstChild("EggHitRequest")
+    while true do
+        if state.AutoBreakUnder or state.AutoBreakAura then
+            local hrp = getHRP()
+            if hrp and not isSnatching then
+                local eggValid = currentEgg and currentEgg.Parent
+                    and currentEgg:IsA("BasePart")
+                    and not currentEgg:GetAttribute("Broken")
+                    and not currentEgg:GetAttribute("Hatching")
+                    and not currentEgg:GetAttribute("Despawning")
+                    and (currentEgg:GetAttribute("Health") == nil or currentEgg:GetAttribute("Health") > 0)
+
+                if not eggValid then
+                    if activeTween then activeTween:Cancel(); activeTween = nil end
+                    if currentEgg and hrp then hrp.Anchored = false end
+                    currentEgg = nil
+                    destroyNinjaPlatform()
+
+                    local bestEgg, bestDist = nil, 999999
+
+                    for _, egg in ipairs(CollectionService:GetTagged("BreakableEgg")) do
+                        if egg:IsA("BasePart")
+                            and not egg:GetAttribute("Broken")
+                            and not egg:GetAttribute("Hatching")
+                            and not egg:GetAttribute("Despawning") then
+                            local eggType = egg:GetAttribute("EggType") or ""
+                            local weight  = egg:GetAttribute("WeightBracket") or "Normal"
+                            if weight == "" then weight = "Normal" end
+
+                            local typeOk   = state.TargetEggType == "All Eggs" or eggType:find(state.TargetEggType)
+                            local weightOk = state.TargetWeight  == "Any"      or weight:upper() == state.TargetWeight:upper()
+
+                            if typeOk and weightOk then
+                                local dist = (egg.Position - hrp.Position).Magnitude
+                                if state.AutoBreakAura and not state.AutoBreakUnder then
+                                    if dist <= 12 and dist < bestDist then bestDist = dist; bestEgg = egg end
+                                elseif dist < bestDist then
+                                    bestDist = dist; bestEgg = egg
+                                end
+                            end
+                        end
+                    end
+
+                    if bestEgg then
+                        currentEgg = bestEgg
+                        if state.AutoBreakUnder then
+                            unlockCharacter()
+                            ensureGlobalPlatform()
+                            local targetUnderPos = getUnderPosition(bestEgg.Position, bestEgg, state.UnderFarmDepth or 2.8)
+                            
+                            if localPlayer.Character then
+                                for _, part in ipairs(localPlayer.Character:GetDescendants()) do
+                                    if part:IsA("BasePart") then part.CanCollide = false end
+                                end
+                            end
+
+                            hrp.Anchored = false
+                            
+                            -- Smooth Under-to-Up Tween Transition with Velocity Safe-Guard
+                            if activeTween then activeTween:Cancel() end
+                            local tweenInfo = TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+                            activeTween = TweenService:Create(hrp, tweenInfo, { CFrame = CFrame.new(targetUnderPos) })
+                            activeTween:Play()
+                            activeTween.Completed:Wait()
+                            hrp.AssemblyLinearVelocity = Vector3.zero
+                        end
+                    elseif state.AutoTreadmill and not isSnatching then
+                        if hrp then hrp.Anchored = false end
+                        if not isTreadmillActive() then teleportToTreadmill() end
+                    end
+                end
+
+                if currentEgg and currentEgg.Parent then
+                    if state.AutoEquipPickaxe then equipPickaxe() end
+
+                    if state.AutoBreakUnder then
+                        local trackPos = getUnderPosition(currentEgg.Position, currentEgg, state.UnderFarmDepth or 2.8)
+                        if (hrp.Position - trackPos).Magnitude > 3 and not (activeTween and activeTween.PlaybackState == Enum.PlaybackState.Playing) then
+                            if activeTween then activeTween:Cancel() end
+                            activeTween = TweenService:Create(hrp, TweenInfo.new(0.2, Enum.EasingStyle.Linear), { CFrame = CFrame.new(trackPos) })
+                            activeTween:Play()
+                        end
+                        hrp.AssemblyLinearVelocity = Vector3.zero
+                        if hrp.Anchored then hrp.Anchored = false end
+                    end
+
+                    if swingController and swingController.Swing then
+                        pcall(function() swingController.Swing(currentEgg) end)
+                    end
+
+                    if eggHitRequest and eggHitRequest:IsA("RemoteEvent") then
+                        pcall(function() eggHitRequest:FireServer(currentEgg) end)
+                    end
+                end
+            end
+        elseif currentEgg then
+            if activeTween then activeTween:Cancel(); activeTween = nil end
+            if localPlayer.Character and localPlayer.Character:FindFirstChild("HumanoidRootPart") then
+                localPlayer.Character.HumanoidRootPart.Anchored = false
+            end
+            currentEgg = nil
+        end
+        task.wait(0.08)
+    end
+end)
+
+task.spawn(function()
+    while true do
+        if state.AutoTreadmill and not isSnatching and not state.AutoBreakUnder then
+            if localPlayer:GetAttribute("Carrying") == nil and not isTreadmillActive() then
+                local plot = getPlot()
+                if plot then
+                    local ghost  = plot:FindFirstChild("Ghost Treadmill")
+                    local hitbox = ghost and (ghost:FindFirstChild("Hitbox") or ghost:FindFirstChildWhichIsA("BasePart"))
+                    local hrp    = getHRP()
+                    if hitbox and hrp and (hrp.Position - hitbox.Position).Magnitude > 6 then
+                        if state.TreadmillUnequip then unequipTools() end
+                        teleportToTreadmill()
+                    end
+                end
+            end
+        end
+        task.wait(1.5)
+    end
+end)
+
+task.spawn(function()
+    while true do
+        if state.AutoBankAnimals and not isSnatching then
+            if localPlayer:GetAttribute("Carrying") ~= nil then
+                teleportToBase(); task.wait(0.6)
+            end
+        end
+        task.wait(0.5)
+    end
+end)
+
+task.spawn(function()
+    while true do
+        if state.AutoUpgradePlot then
+            local req = ReplicatedStorage:FindFirstChild("UpgradePlotRequest")
+            if req and req:IsA("RemoteEvent") then req:FireServer() end
+        end
+        if state.AutoUpgradeTreadmill then
+            local req = ReplicatedStorage:FindFirstChild("UpgradeTreadmillRequest")
+            if req and req:IsA("RemoteEvent") then req:FireServer() end
+        end
+        if state.AutoBuyPickaxe then
+            pcall(function()
+                local cfg      = require(ReplicatedStorage.Shared.PickaxeConfig)
+                local nextTier = (localPlayer:GetAttribute("PickaxeTier") or 1) + 1
+                local cash     = localPlayer:GetAttribute("Cash") or 0
+                if cfg and cfg.Tiers and cfg.Tiers[nextTier] then
+                    local tier = cfg.Tiers[nextTier]
+                    if tier.Price and cash >= tier.Price then
+                        local req = ReplicatedStorage:FindFirstChild("PickaxeShopRequest")
+                        if req and req:IsA("RemoteEvent") then
+                            req:FireServer("Purchase", nextTier)
+                            task.wait(0.2)
+                            req:FireServer("Equip", nextTier)
+                        end
+                    end
+                end
+            end)
+        end
+        task.wait(2.5)
+    end
+end)
+
+task.spawn(function()
+    while true do
+        if state.AutoBatAura then
+            local hrp = getHRP()
+            if hrp then
+                local batReq = ReplicatedStorage:FindFirstChild("BatHitRequest")
+                if batReq and batReq:IsA("RemoteEvent") then
+                    if state.TargetPlayers then
+                        for _, player in ipairs(Players:GetPlayers()) do
+                            if player ~= localPlayer and player.Character
+                                and player.Character:FindFirstChild("HumanoidRootPart") then
+                                if (player.Character.HumanoidRootPart.Position - hrp.Position).Magnitude <= state.BatRange then
+                                    equipBat(); batReq:FireServer(player.Character); task.wait(0.1)
+                                end
+                            end
+                        end
+                    end
+                    if state.TargetGuards then
+                        for _, obj in ipairs(workspace:GetChildren()) do
+                            if obj:IsA("Model") and obj.Name:find("Guard") and obj:FindFirstChild("HumanoidRootPart") then
+                                if (obj.HumanoidRootPart.Position - hrp.Position).Magnitude <= state.BatRange then
+                                    equipBat(); batReq:FireServer(obj); task.wait(0.1)
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        task.wait(0.3)
+    end
+end)
+
+local detectedRareEggs = {}
+
+task.spawn(function()
+    while true do
+        if state.RareNotifier then
+            for _, egg in ipairs(CollectionService:GetTagged("BreakableEgg")) do
+                if egg:IsA("BasePart") and not detectedRareEggs[egg] then
+                    local weight  = egg:GetAttribute("WeightBracket") or ""
+                    local eggType = egg:GetAttribute("EggType") or ""
+                    if weight == "TITANIC" or weight == "HUGE"
+                        or eggType:find("Cosmic") or eggType:find("Secret") or eggType:find("Fortune") then
+                        detectedRareEggs[egg] = true
+                        windUI:Notify({
+                            Title    = "Rare Egg Detected!",
+                            Content  = ("[%s] %s spawned!"):format(weight ~= "" and weight or "RARE", eggType),
+                            Duration = 5,
+                            Icon     = "bell",
+                        })
+                    end
+                end
+            end
+        end
+        task.wait(2)
+    end
+end)
+
+trackConnection(RunService.Stepped:Connect(function()
+    if state.Noclip and localPlayer.Character then
+        for _, part in ipairs(localPlayer.Character:GetDescendants()) do
+            if part:IsA("BasePart") and part.CanCollide then part.CanCollide = false end
+        end
+    end
+    local humanoid = getHumanoid()
+    if humanoid then
+        if state.WalkSpeed and humanoid.WalkSpeed ~= state.WalkSpeed then
+            humanoid.WalkSpeed = state.WalkSpeed
+        end
+        if state.JumpPower and humanoid.JumpPower ~= state.JumpPower then
+            humanoid.UseJumpPower = true
+            humanoid.JumpPower    = state.JumpPower
+        end
+    end
+end))
+
+trackConnection(UserInputService.JumpRequest:Connect(function()
+    if state.InfiniteJump then
+        local humanoid = getHumanoid()
+        if humanoid then humanoid:ChangeState("Jumping") end
+    end
+end))
+
+local flyBodyPos, flyBodyGyro
+
+trackConnection(RunService.RenderStepped:Connect(function()
+    local hrp      = getHRP()
+    local humanoid = getHumanoid()
+
+    if state.Fly and hrp and humanoid then
+        if not flyBodyPos then
+            flyBodyPos             = Instance.new("BodyPosition")
+            flyBodyPos.MaxForce    = Vector3.new(1e6, 1e6, 1e6)
+            flyBodyPos.Position    = hrp.Position
+            flyBodyPos.Parent      = hrp
+
+            flyBodyGyro            = Instance.new("BodyGyro")
+            flyBodyGyro.MaxTorque  = Vector3.new(1e6, 1e6, 1e6)
+            flyBodyGyro.CFrame     = hrp.CFrame
+            flyBodyGyro.Parent     = hrp
+        end
+
+        local cam = workspace.CurrentCamera
+        local dir = Vector3.zero
+
+        if UserInputService:IsKeyDown(Enum.KeyCode.W)         then dir = dir + cam.CFrame.LookVector  end
+        if UserInputService:IsKeyDown(Enum.KeyCode.S)         then dir = dir - cam.CFrame.LookVector  end
+        if UserInputService:IsKeyDown(Enum.KeyCode.A)         then dir = dir - cam.CFrame.RightVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.D)         then dir = dir + cam.CFrame.RightVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.Space)     then dir = dir + Vector3.new(0, 1, 0)  end
+        if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then dir = dir - Vector3.new(0, 1, 0)  end
+
+        if dir.Magnitude > 0 then dir = dir.Unit * state.FlySpeed end
+
+        flyBodyPos.Position  = hrp.Position + dir * 0.05
+        flyBodyGyro.CFrame   = cam.CFrame
+    else
+        if flyBodyPos  then flyBodyPos:Destroy();  flyBodyPos  = nil end
+        if flyBodyGyro then flyBodyGyro:Destroy(); flyBodyGyro = nil end
+    end
+end))
+
+-- ─── Startup ─────────────────────────────────────────────────────────────────
+
+task.wait()
+task.wait(0.2)
+
+if mobileToggleGui then mobileToggleGui.Enabled = true end
+if window and window.Open then window:Open() end
+if ninjaStealTab and ninjaStealTab.Select then ninjaStealTab:Select() end
+
+windUI:Notify({ Title="KenHub Loaded", Content="Break and Steal an Egg script ready!", Duration=4, Icon="sparkles" })
